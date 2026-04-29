@@ -58,8 +58,9 @@ def sha256_bytes( bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def is_valid_pdf_bytes( bytes) -> bool:
-    return data[:4] == b'%PDF'
+def is_valid_pdf_bytes(file_bytes: bytes) -> bool:
+    return len(file_bytes) > 4 and file_bytes[:4] == b'%PDF'
+
 
 
 def extract_text_from_pdf_bytes(file_bytes: bytes) -> str:
