@@ -17,6 +17,8 @@ from services.chunk_service import prepare_chunks
 from services.quiz_service import generate_quiz_from_chunks
 
 SUBJECT, PDF_WAIT, QUESTION_COUNT, QUIZ = range(4)
+OPTION_LABELS = ["A", "B", "C", "D"]
+
 
 def count_keyboard():
     return InlineKeyboardMarkup([
@@ -28,11 +30,32 @@ def count_keyboard():
         ]
     ])
 
-def answer_keyboard(options):
+
+def answer_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(opt[:100], callback_data=f"ans|{i}")]
-        for i, opt in enumerate(options)
+        [
+            InlineKeyboardButton("A", callback_data="ans|0"),
+            InlineKeyboardButton("B", callback_data="ans|1"),
+        ],
+        [
+            InlineKeyboardButton("C", callback_data="ans|2"),
+            InlineKeyboardButton("D", callback_data="ans|3"),
+        ],
     ])
+
+
+def option_label(index: int) -> str:
+    if 0 <= index < len(OPTION_LABELS):
+        return OPTION_LABELS[index]
+    return str(index + 1)
+
+
+def format_options_text(options):
+    lines = []
+    for i, opt in enumerate(options[:4]):
+        lines.append(f"{option_label(i)}) {opt}")
+    return "\n".join(lines)
+
 
 def chunk_limit_for_questions(num_q: int) -> int:
     if num_q <= 3:
@@ -43,10 +66,12 @@ def chunk_limit_for_questions(num_q: int) -> int:
         return 4
     return 5
 
+
 async def new_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("أرسل اسم المادة لبدء اختبار جديد.")
     return SUBJECT
+
 
 async def receive_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subject = update.message.text.strip()
@@ -57,6 +82,7 @@ async def receive_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["subject"] = subject
     await update.message.reply_text("الآن أرسل ملف PDF.")
     return PDF_WAIT
+
 
 async def receive_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
@@ -126,6 +152,7 @@ async def receive_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return QUESTION_COUNT
 
+
 async def choose_question_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -148,7 +175,7 @@ async def choose_question_count(update: Update, context: ContextTypes.DEFAULT_TY
             break
 
         questions = generate_quiz_from_chunks(selected_chunks, num_q, language)
-        if questions:
+        if questions and len(questions) >= max(2, min(num_q, 3)):
             break
 
     if not questions:
@@ -167,6 +194,7 @@ async def choose_question_count(update: Update, context: ContextTypes.DEFAULT_TY
     await send_question(q.message.chat_id, context)
     return QUIZ
 
+
 async def send_question(chat_id, context: ContextTypes.DEFAULT_TYPE):
     quiz = context.user_data["quiz"]
     qi = context.user_data["qi"]
@@ -175,12 +203,14 @@ async def send_question(chat_id, context: ContextTypes.DEFAULT_TYPE):
     language = context.user_data.get("language", "arabic")
 
     header = f"📘 السؤال {qi + 1} من {total}" if language == "arabic" else f"📘 Question {qi + 1} of {total}"
+    options_text = format_options_text(item["options"])
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"{header}\n\n{item['question']}",
-        reply_markup=answer_keyboard(item["options"])
+        text=f"{header}\n\n{item['question']}\n\n{options_text}",
+        reply_markup=answer_keyboard()
     )
+
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -195,8 +225,14 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     qi = context.user_data["qi"]
     item = quiz[qi]
 
+    if selected_idx < 0 or selected_idx >= len(item["options"]):
+        await q.message.reply_text("خيار غير صالح.")
+        return QUIZ
+
     selected = item["options"][selected_idx]
     correct = item["answer"]
+    correct_idx = item["options"].index(correct) if correct in item["options"] else -1
+
     ok = selected == correct
     language = context.user_data.get("language", "arabic")
 
@@ -211,10 +247,21 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_reply_markup(reply_markup=None)
 
+    selected_label = option_label(selected_idx)
+    correct_label = option_label(correct_idx) if correct_idx >= 0 else ""
+
     if language == "arabic":
-        feedback = "✅ إجابة صحيحة" if ok else f"❌ إجابة خاطئة\nالصحيحة: {correct}"
+        feedback = (
+            f"✅ إجابة صحيحة\nاخترت: {selected_label}) {selected}"
+            if ok else
+            f"❌ إجابة خاطئة\nاخترت: {selected_label}) {selected}\nالصحيحة: {correct_label}) {correct}"
+        )
     else:
-        feedback = "✅ Correct answer" if ok else f"❌ Wrong answer\nCorrect: {correct}"
+        feedback = (
+            f"✅ Correct answer\nYou chose: {selected_label}) {selected}"
+            if ok else
+            f"❌ Wrong answer\nYou chose: {selected_label}) {selected}\nCorrect: {correct_label}) {correct}"
+        )
 
     await q.message.reply_text(feedback)
 
@@ -224,6 +271,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_question(q.message.chat_id, context)
     return QUIZ
+
 
 async def finish_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = context.user_data["score"]
@@ -252,4 +300,3 @@ async def finish_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(result_text)
     context.user_data.clear()
     return ConversationHandler.END
-
