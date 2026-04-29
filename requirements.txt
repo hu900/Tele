@@ -1,3 +1,5 @@
 python-telegram-bot==21.8
 pdfplumber
 openai
+arabic-reshaper
+python-bidi
