@@ -6,9 +6,9 @@ from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_FALLBACK_MODEL, MAX_CHUN
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-MAX_Q_LEN = 220
-MIN_Q_LEN = 12
-MAX_OPT_LEN = 90
+MAX_Q_LEN = 400
+MIN_Q_LEN = 10
+MAX_OPT_LEN = 300
 MIN_OPT_LEN = 1
 OPTION_KEYS = ["A", "B", "C", "D"]
 
@@ -18,135 +18,103 @@ OPTION_KEYS = ["A", "B", "C", "D"]
 # ─────────────────────────────────────────────
 
 def build_system_prompt():
-    return """أنت أداة نسخ ومطابقة من نص أكاديمي — لا تُعدِّل ولا تُبدع.
+    return """أنت أداة استخراج أسئلة اختبار من نصوص تجميعات أكاديمية.
 
-مهمتك: انسخ سؤالاً وإجابته من النص كما هما حرفيًا.
+النص الذي ستستقبله يحتوي أسئلة اختبار حقيقية موجودة بالفعل مع خياراتها وإجاباتها.
 
-قواعد صارمة:
-1. السؤال يجب أن يكون منسوخًا حرفيًا من النص — لا تصغ سؤالاً من عندك أبدًا.
-2. الإجابة الصحيحة منسوخة حرفيًا من النص بدون تغيير أي كلمة.
-3. المشتتات الثلاثة مأخوذة حرفيًا من نفس النص لكن في سياق مختلف.
-4. لا تُضف كلمة واحدة من عندك — كل كلمة في السؤال والخيارات يجب أن تكون موجودة في النص.
-5. إذا لم يوجد في النص سؤال صريح، اصنع جملة سؤالية فقط بتحويل جملة خبرية من النص إلى استفهام.
-6. ضع الإجابة الصحيحة في موضع عشوائي من A إلى D — ليس دائمًا A."""
+مهمتك الوحيدة:
+- اقرأ النص وحدد الأسئلة الموجودة فيه.
+- استخرج كل سؤال مع خياراته وإجابته الصحيحة كما هي في النص حرفيًا.
+- لا تُولِّد ولا تُعدِّل ولا تُضف أي شيء من عندك.
+- إذا كانت الإجابة الصحيحة مُحددة في النص (بعلامة، أو بذكر الإجابة، أو بأي طريقة)، استخرجها.
+- إذا لم تجد إجابة محددة في النص، استنتجها من السياق فقط إذا كانت واضحة جدًا.
+- إذا لم تستطع تحديد الإجابة، تجاهل هذا السؤال ولا تُدرجه."""
 
 
 def build_system_prompt_en():
-    return """You are a copy-and-match tool from academic text — no creativity, no modification.
+    return """You are an exam question extractor from academic past paper collections.
 
-Your task: copy a question and its answer from the text verbatim.
+The text you receive contains real exam questions that already exist with their choices and answers.
 
-Strict rules:
-1. The question must be copied verbatim from the text — never compose a question from your own words.
-2. The correct answer is copied verbatim from the text without changing any word.
-3. The three distractors are taken verbatim from the same text but in a different context.
-4. Do not add a single word of your own — every word in the question and options must exist in the text.
-5. If no explicit question exists in the text, convert an existing declarative sentence into a question form only.
-6. Place the correct answer in a random position from A to D — not always A."""
+Your only task:
+- Read the text and identify existing questions.
+- Extract each question with its choices and correct answer exactly as they appear in the text verbatim.
+- Do not generate, modify, or add anything from your own knowledge.
+- If the correct answer is marked in the text (by symbol, mention, or any method), extract it.
+- If no answer is explicitly marked, infer it from context only if it is very obvious.
+- If you cannot determine the answer, skip this question entirely."""
 
 
 def build_user_prompt_ar(chunk_text):
-    correct_position = random.choice(OPTION_KEYS)
-    return f"""النص المصدر:
+    return f"""النص التالي مأخوذ من تجميعات اختبارات أكاديمية:
 ---
 {chunk_text}
 ---
 
-التعليمات:
-1. ابحث في النص عن جملة تحتوي معلومة واضحة (رقم، تعريف، اسم، شرط، خطوة).
-2. انسخ الجملة كما هي واحوّلها إلى سؤال باستبدال المعلومة بفراغ أو علامة استفهام.
-3. الإجابة الصحيحة = المعلومة المحذوفة من الجملة — منسوخة حرفيًا.
-4. الخيارات الخاطئة = معلومات مشابهة من نفس النص في سياق آخر — منسوخة حرفيًا.
-5. ضع الإجابة الصحيحة في الموضع {correct_position}.
-6. لا تضف ولا تعدّل أي كلمة من عندك.
+المطلوب:
+استخرج جميع الأسئلة الموجودة في هذا النص مع خياراتها وإجاباتها الصحيحة.
 
-أرجع JSON فقط:
+قواعد الاستخراج:
+- السؤال: انسخه كما هو من النص بالكامل.
+- الخيارات: انسخ الخيارات الأربعة كما هي. إذا كانت أقل من أربعة، أكملها بخيارات منطقية من النص فقط.
+- الإجابة الصحيحة: انسخها كما هي. إذا كانت محددة بحرف (أ، ب، ج، د أو A، B، C، D) اجعل correct هو الحرف الإنجليزي المقابل.
+- لا تُبدّل ولا تُعدّل أي نص.
+
+أرجع JSON فقط بهذا الشكل:
 {{
-  "question": "الجملة من النص مع فراغ أو سؤال مباشر",
-  "choices": {{
-    "A": "نص من النص حرفيًا",
-    "B": "نص من النص حرفيًا",
-    "C": "نص من النص حرفيًا",
-    "D": "نص من النص حرفيًا"
-  }},
-  "correct": "{correct_position}",
-  "source_quote": "الجملة الحرفية الكاملة من النص"
-}}"""
+  "questions": [
+    {{
+      "question": "نص السؤال كاملًا كما في المصدر",
+      "choices": {{
+        "A": "نص الخيار الأول كما في المصدر",
+        "B": "نص الخيار الثاني كما في المصدر",
+        "C": "نص الخيار الثالث كما في المصدر",
+        "D": "نص الخيار الرابع كما في المصدر"
+      }},
+      "correct": "A",
+      "source_quote": "الجملة أو الرمز الذي حدد الإجابة في النص"
+    }}
+  ]
+}}
+
+إذا لم يوجد أي سؤال قابل للاستخراج في هذا النص، أرجع:
+{{"questions": []}}"""
 
 
 def build_user_prompt_en(chunk_text):
-    correct_position = random.choice(OPTION_KEYS)
-    return f"""Source text:
+    return f"""The following text is taken from academic past exam paper collections:
 ---
 {chunk_text}
 ---
 
-Instructions:
-1. Find a sentence in the text that contains a clear fact (number, definition, name, condition, step).
-2. Copy the sentence as-is and convert it into a question by replacing the fact with a blank or question form.
-3. Correct answer = the removed fact from the sentence — copied verbatim.
-4. Wrong choices = similar facts from the same text in a different context — copied verbatim.
-5. Place the correct answer at position {correct_position}.
-6. Do not add or modify any word of your own.
+Required:
+Extract all questions that exist in this text along with their choices and correct answers.
 
-Return JSON only:
+Extraction rules:
+- Question: copy it exactly as it appears in the text.
+- Choices: copy all four choices as they are. If fewer than four exist, fill in with logical options from the same text only.
+- Correct answer: copy it as-is. If marked by a letter (A, B, C, D), set correct to that letter.
+- Do not alter or modify any text.
+
+Return JSON only in this format:
 {{
-  "question": "the sentence from the text with a blank or direct question",
-  "choices": {{
-    "A": "verbatim text from source",
-    "B": "verbatim text from source",
-    "C": "verbatim text from source",
-    "D": "verbatim text from source"
-  }},
-  "correct": "{correct_position}",
-  "source_quote": "the complete verbatim sentence from the text"
-}}"""
+  "questions": [
+    {{
+      "question": "full question text exactly as in source",
+      "choices": {{
+        "A": "first choice text as in source",
+        "B": "second choice text as in source",
+        "C": "third choice text as in source",
+        "D": "fourth choice text as in source"
+      }},
+      "correct": "A",
+      "source_quote": "the sentence or symbol that marked the answer in the text"
+    }}
+  ]
+}}
 
-
-def build_verifier_prompt_ar(question, chunk_text):
-    correct_letter = question["correct"]
-    correct_text = question["choices"].get(correct_letter, "")
-    return f"""تحقق من سؤال واحد فقط:
-
-النص المصدر:
----
-{chunk_text}
----
-
-السؤال: {question["question"]}
-الإجابة المختارة: {correct_letter}) {correct_text}
-الاقتباس المرجعي: {question.get("source_quote", "")}
-
-هل هذه الإجابة موجودة في النص بشكل مباشر أو ضمني واضح؟
-
-أرجع JSON فقط:
-{{
-  "verdict": "PASS",
-  "reason": ""
-}}"""
-
-
-def build_verifier_prompt_en(question, chunk_text):
-    correct_letter = question["correct"]
-    correct_text = question["choices"].get(correct_letter, "")
-    return f"""Verify one question only:
-
-Source text:
----
-{chunk_text}
----
-
-Question: {question["question"]}
-Marked answer: {correct_letter}) {correct_text}
-Reference quote: {question.get("source_quote", "")}
-
-Is this answer directly or clearly implicitly supported by the text?
-
-Return JSON only:
-{{
-  "verdict": "PASS",
-  "reason": ""
-}}"""
+If no extractable question exists in this text, return:
+{{"questions": []}}"""
 
 
 # ─────────────────────────────────────────────
@@ -157,7 +125,7 @@ def _normalize(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
-def _call_openai(system_msg, user_msg, model_name, temperature=0.2):
+def _call_openai(system_msg, user_msg, model_name, temperature=0.0):
     response = client.chat.completions.create(
         model=model_name,
         messages=[
@@ -178,7 +146,7 @@ def _parse_json(raw):
         return {}
 
 
-def _validate_raw_question(data):
+def _validate_question(data):
     question = _normalize(data.get("question", ""))
     choices_raw = data.get("choices", {})
     correct = _normalize(data.get("correct", "")).upper()
@@ -197,13 +165,11 @@ def _validate_raw_question(data):
             return None
         choices[key] = val
 
+    # لا تكرار في الخيارات
     if len(set(v.lower() for v in choices.values())) != 4:
         return None
 
     if correct not in OPTION_KEYS:
-        return None
-
-    if not source_quote or len(source_quote) < 5:
         return None
 
     return {
@@ -214,10 +180,12 @@ def _validate_raw_question(data):
     }
 
 
-def _shuffle_options(question):
+def _to_output_format(question):
     """
-    يخلط الخيارات عشوائيًا بعد التوليد بغض النظر عن موضعها الأصلي،
-    ويحفظ الإجابة كنص حرفي لا كحرف، حتى لا يتأثر بالخلط.
+    يحول السؤال إلى الشكل الذي يتوقعه handlers/quiz.py:
+    - options: قائمة مرتبة A→D
+    - answer: النص الحرفي للإجابة الصحيحة
+    يخلط الخيارات عشوائيًا حتى لا تكون الإجابة دائمًا في نفس الموضع.
     """
     correct_letter = question["correct"]
     correct_text = question["choices"][correct_letter]
@@ -232,24 +200,6 @@ def _shuffle_options(question):
     }
 
 
-def _verify_question(question, chunk_text, language, model_name, strict=True):
-    try:
-        if language == "arabic":
-            system_msg = "أنت مدقق جودة. أرجع JSON فقط."
-            user_msg = build_verifier_prompt_ar(question, chunk_text)
-        else:
-            system_msg = "You are a quality verifier. Return JSON only."
-            user_msg = build_verifier_prompt_en(question, chunk_text)
-
-        temp = 0.0 if strict else 0.1
-        raw = _call_openai(system_msg, user_msg, model_name, temperature=temp)
-        data = _parse_json(raw)
-        verdict = _normalize(data.get("verdict", "")).upper()
-        return verdict == "PASS"
-    except Exception:
-        return not strict
-
-
 def _models_to_try():
     models = []
     if OPENAI_MODEL:
@@ -260,13 +210,13 @@ def _models_to_try():
 
 
 # ─────────────────────────────────────────────
-# توليد سؤال واحد من chunk واحد
+# الاستخراج من chunk واحد
 # ─────────────────────────────────────────────
 
-def _generate_one(chunk, language, model_name, strict_verify=True):
+def _extract_from_chunk(chunk, language, model_name):
     chunk_text = _normalize(chunk.get("chunk_text", ""))[:MAX_CHUNK_TEXT_CHARS]
-    if not chunk_text or len(chunk_text) < 80:
-        return None
+    if not chunk_text or len(chunk_text) < 40:
+        return []
 
     try:
         if language == "arabic":
@@ -276,22 +226,24 @@ def _generate_one(chunk, language, model_name, strict_verify=True):
             system_msg = build_system_prompt_en()
             user_msg = build_user_prompt_en(chunk_text)
 
-        raw = _call_openai(system_msg, user_msg, model_name, temperature=0.2)
+        # temperature=0 لأن المهمة استخراج لا توليد
+        raw = _call_openai(system_msg, user_msg, model_name, temperature=0.0)
         data = _parse_json(raw)
-        question = _validate_raw_question(data)
-        if not question:
-            return None
+        raw_questions = data.get("questions", [])
 
-        verified = _verify_question(
-            question, chunk_text, language, model_name, strict=strict_verify
-        )
-        if not verified:
-            return None
+        if not isinstance(raw_questions, list):
+            return []
 
-        return _shuffle_options(question)
+        results = []
+        for raw_q in raw_questions:
+            validated = _validate_question(raw_q)
+            if validated:
+                results.append(_to_output_format(validated))
+
+        return results
 
     except Exception:
-        return None
+        return []
 
 
 # ─────────────────────────────────────────────
@@ -302,7 +254,7 @@ def generate_quiz_from_chunks(chunks, num_q=5, language="arabic"):
     if not client or not chunks:
         return []
 
-    results = []
+    all_extracted = []
     seen_questions = set()
 
     for model_name in _models_to_try():
@@ -310,46 +262,21 @@ def generate_quiz_from_chunks(chunks, num_q=5, language="arabic"):
         shuffled_chunks = list(chunks)
         random.shuffle(shuffled_chunks)
 
-        # المرحلة الأولى: تحقق صارم
         for chunk in shuffled_chunks:
-            if len(results) >= num_q:
-                break
+            extracted = _extract_from_chunk(chunk, language, model_name)
 
-            question_result = _generate_one(
-                chunk, language, model_name, strict_verify=True
-            )
-            if not question_result:
-                continue
-
-            key = question_result["question"].lower().strip()
-            if key in seen_questions:
-                continue
-
-            seen_questions.add(key)
-            results.append(question_result)
-
-        # المرحلة الثانية: إذا لم نصل للعدد المطلوب، نُكمل بدون verifier
-        if len(results) < num_q:
-            random.shuffle(shuffled_chunks)
-            for chunk in shuffled_chunks:
-                if len(results) >= num_q:
-                    break
-
-                question_result = _generate_one(
-                    chunk, language, model_name, strict_verify=False
-                )
-                if not question_result:
-                    continue
-
-                key = question_result["question"].lower().strip()
+            for item in extracted:
+                key = item["question"].lower().strip()
                 if key in seen_questions:
                     continue
-
                 seen_questions.add(key)
-                results.append(question_result)
+                all_extracted.append(item)
 
-        if results:
+            if len(all_extracted) >= num_q * 2:
+                break
+
+        if all_extracted:
             break
 
-    random.shuffle(results)
-    return results[:num_q]
+    random.shuffle(all_extracted)
+    return all_extracted[:num_q]
