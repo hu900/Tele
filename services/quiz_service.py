@@ -1,46 +1,57 @@
-import openai
+import os
 import json
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from openai import OpenAI
 
-openai.api_key = OPENAI_API_KEY
+# يتم جلب المفتاح تلقائياً من إعدادات Railway
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-async def extract_questions_from_text(text):
+async def get_exam_questions(text_content, count=10):
     """
-    وظيفة هذا الجزء هي تحليل النص المستخرج من الـ PDF 
-    وتحويل الأسئلة الموجودة فيه إلى صيغة برمجية
+    استخراج الأسئلة الفعلية من نص الاختبار السابق باستخدام OpenAI.
     """
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    
+    # تحديد كمية النص لضمان عدم تجاوز الـ Tokens (أول 5000 حرف غالباً تكفي لعدة أسئلة)
+    context = text_content[:6000]
+
     prompt = f"""
-    أنت خبير في تحليل الاختبارات. مهمتك هي استخراج الأسئلة الموجودة في النص التالي وتحويلها إلى تنسيق JSON.
+    أنت متخصص في تحليل أوراق الاختبارات. 
+    المهمة: استخرج {count} أسئلة من النص المرفق وهو عبارة عن "اختبار سابق".
     
-    النص مأخوذ من ملف اختبار سابق. قم باستخراج الأسئلة التي لها خيارات (A, B, C, D) فقط.
-    
-    شروط هامة:
-    1. إذا كانت الإجابة الصحيحة مشار إليها في النص (مثلاً تحتها خط أو بجانبها علامة)، استخرجها.
-    2. إذا لم تكن الإجابة موجودة، حاول استنتاج الإجابة الصحيحة بناءً على خبرتك.
-    3. يجب أن يكون الناتج JSON فقط بهذا الشكل:
+    التعليمات الصارمة:
+    1. استخرج الأسئلة *كما وردت* في النص دون تأليف أسئلة جديدة.
+    2. يجب أن يكون السؤال من نوع "اختيار من متعدد" وله 4 خيارات.
+    3. استخرج الإجابة الصحيحة إذا كانت محددة في النص، أو استنتجها إذا كانت غائبة.
+    4. الناتج يجب أن يكون JSON فقط وبنفس لغة النص الأصلي.
+
+    التنسيق المطلوب:
     {{
       "questions": [
         {{
-          "question": "نص السؤال هنا",
-          "options": ["الخيار الأول", "الخيار الثاني", "الخيار الثالث", "الخيار الرابع"],
-          "answer": "نص الخيار الصحيح حرفياً"
+          "question": "نص السؤال المستخرج",
+          "options": ["خيار 1", "خيار 2", "خيار 3", "خيار 4"],
+          "answer": "نص الإجابة الصحيحة المطابق تماماً لأحد الخيارات"
         }}
       ]
     }}
 
     النص:
-    {text}
+    {context}
     """
 
     try:
-        response = openai.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "system", "content": "You are a professional exam parser."},
-                      {"role": "user", "content": prompt}],
-            response_format={ "type": "json_object" }
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a precise exam extractor. Output ONLY valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1 # درجة حرارة منخفضة جداً لضمان النقل الحرفي وعدم الإبداع
         )
-        data = json.loads(response.choices[0].message.content)
-        return data.get('questions', [])
+
+        raw_data = json.loads(response.choices[0].message.content)
+        return raw_data.get("questions", [])
     except Exception as e:
-        print(f"Error in AI Service: {e}")
+        print(f"OpenAI Error: {e}")
         return []
