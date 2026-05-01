@@ -8,6 +8,7 @@ services/quiz_service.py — توليد الأسئلة عبر OpenAI
   - retry تلقائي عند فشل الـ API
   - logging بدلاً من print
   - دعم اللغتين العربية والإنجليزية في البرومبت
+  - [FIX] تغيير max_tokens → max_completion_tokens (مطلوب في o-series والموديلات الجديدة)
 """
 import json
 import logging
@@ -99,7 +100,7 @@ async def generate_questions(
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.1,
-                max_tokens=4096,
+                max_completion_tokens=4096,  # ✅ FIX: كان max_tokens (غير مدعوم في الموديلات الجديدة)
             )
 
             raw = response.choices[0].message.content or ""
